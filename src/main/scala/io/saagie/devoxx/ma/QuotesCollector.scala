@@ -1,0 +1,80 @@
+package io.saagie.devoxx.ma
+
+
+import java.util.Properties
+
+import akka.actor.{Actor, ActorLogging}
+import akka.http.scaladsl.Http
+import akka.http.scaladsl.model.{HttpRequest, HttpResponse, StatusCodes}
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
+import akka.util.ByteString
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig}
+
+import scala.language.postfixOps
+
+/**
+  * Created by aurelien on 18/10/16.
+  */
+class QuotesCollector extends Actor with ActorLogging {
+
+  import akka.pattern.pipe
+  import context.dispatcher
+
+  final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
+
+  val http = Http(context.system)
+  val URLBase = "http://download.finance.yahoo.com/d/quotes.csv?e=.csv&f="
+  val URLEnd = "&s="
+  val stockDayFormat = "lsnpd1oml1vq"
+
+  val props = new Properties()
+
+  val broker = "nn1.p11.prod.saagie.io:9092"
+  props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, broker)
+  props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
+  props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
+  val producer = new KafkaProducer[String, String](props)
+
+  def mkUrl(symbols: List[String]) = URLBase + stockDayFormat + URLEnd + symbols.map(java.net.URLEncoder.encode(_,"UTF-8")).mkString("+")
+
+  override def preStart() = {
+  }
+
+  def receive = {
+    case symbols: List[_]                                 =>
+      log.info("symbols received")
+      http.singleRequest(HttpRequest(uri = mkUrl(symbols.map(_.toString)) )).pipeTo(self)
+    case symbol: String                                   =>
+      log.info("single symbol received")
+      self ! List(symbol)
+    case HttpResponse(StatusCodes.OK, headers, entity, _) =>
+      log.info("response ok from yahoo servers")
+      pipe(
+        ??? // TODO concatenate received data
+      ) to self
+    case HttpResponse(code, _, _, _)                      => log.info("Request failed, response code: " + code)
+    case bs: ByteString                                   =>
+      log.info("date received to be sent to kafka")
+      val msgs: List[String] = bs.decodeString("utf-8").lines.toList
+      msgs.foreach(log.info(_))
+      ???   // TODO Send data to Kafka
+  }
+}
+
+
+object QuotesCollector extends App {
+
+  import scala.concurrent.duration._
+  import scala.language.postfixOps
+
+  implicit val system = akka.actor.ActorSystem()
+  import system.dispatcher
+
+  val consideredSymbols = List(
+    "DIA","AAPL","AXP","BA","CAT","CSCO","CVX","DD","DIS","GE","GS","HD","IBM","INTC","JNJ",
+    "JPM","KO","MCD","MMM","MRK","MSFT","NKE","PFE","PG","TRV","UNH","UTX","VZ","WMT","XOM"
+  )
+
+  val streamActor = ??? //TODO create QuoteCollector streamActor
+  system.scheduler.schedule(0 milliseconds, 10 seconds, streamActor, consideredSymbols)
+}
