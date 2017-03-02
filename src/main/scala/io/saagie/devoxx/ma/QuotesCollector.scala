@@ -3,12 +3,12 @@ package io.saagie.devoxx.ma
 
 import java.util.Properties
 
-import akka.actor.{Actor, ActorLogging}
+import akka.actor.{Actor, ActorLogging, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse, StatusCodes}
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
 import akka.util.ByteString
-import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig}
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
 
 import scala.language.postfixOps
 
@@ -29,7 +29,7 @@ class QuotesCollector extends Actor with ActorLogging {
 
   val props = new Properties()
 
-  val broker = "nn1.p11.prod.saagie.io:9092"
+  val broker = "192.168.52.50:31200"
   props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, broker)
   props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
   props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
@@ -49,15 +49,13 @@ class QuotesCollector extends Actor with ActorLogging {
       self ! List(symbol)
     case HttpResponse(StatusCodes.OK, headers, entity, _) =>
       log.info("response ok from yahoo servers")
-      pipe(
-        ??? // TODO concatenate received data
-      ) to self
+      pipe(entity.dataBytes.runFold(ByteString(""))(_ ++ _)) to self
     case HttpResponse(code, _, _, _)                      => log.info("Request failed, response code: " + code)
     case bs: ByteString                                   =>
       log.info("date received to be sent to kafka")
       val msgs: List[String] = bs.decodeString("utf-8").lines.toList
       msgs.foreach(log.info(_))
-      ???   // TODO Send data to Kafka
+      msgs.foreach( l => producer.send(new ProducerRecord[String, String]("quotes", null,s"${System.currentTimeMillis},$l")) )
   }
 }
 
@@ -75,6 +73,6 @@ object QuotesCollector extends App {
     "JPM","KO","MCD","MMM","MRK","MSFT","NKE","PFE","PG","TRV","UNH","UTX","VZ","WMT","XOM"
   )
 
-  val streamActor = ??? //TODO create QuoteCollector streamActor
+  val streamActor = system.actorOf(Props(new QuotesCollector()))
   system.scheduler.schedule(0 milliseconds, 10 seconds, streamActor, consideredSymbols)
 }
